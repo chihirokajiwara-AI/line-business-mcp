@@ -15,6 +15,10 @@ export interface QuickReplyItem {
 }
 
 export function buildTextWithQuickReply(text: string, items: QuickReplyItem[]) {
+  if (items.length > 13) throw new Error(`Quick reply supports max 13 items, got ${items.length}`);
+  for (const item of items) {
+    if (item.label.length > 20) throw new Error(`Quick reply label "${item.label}" exceeds 20 character limit`);
+  }
   return {
     type: "text",
     text,
@@ -64,6 +68,12 @@ export interface FlexBubbleParams {
 }
 
 export function buildFlexBubble(params: FlexBubbleParams) {
+  if (!params.title) throw new Error("title is required and cannot be empty");
+  if (params.footer_buttons) {
+    for (const btn of params.footer_buttons) {
+      if (btn.label.length > 20) throw new Error(`Button label "${btn.label}" exceeds 20 character limit`);
+    }
+  }
   const bubble: Record<string, unknown> = {
     type: "bubble",
     body: {
@@ -140,6 +150,7 @@ export function buildFlexBubble(params: FlexBubbleParams) {
 // ── Flex Carousel ────────────────────────────────────────
 
 export function buildFlexCarousel(bubbles: FlexBubbleParams[]) {
+  if (bubbles.length > 12) throw new Error(`Carousel supports max 12 bubbles, got ${bubbles.length}`);
   const contents = bubbles.map((b) => {
     const msg = buildFlexBubble(b);
     return msg.contents;
@@ -160,6 +171,9 @@ export function buildConfirmMessage(
   yesData?: string,
   noData?: string,
 ) {
+  if (yesLabel.length > 20) throw new Error(`Yes label "${yesLabel}" exceeds 20 character limit`);
+  if (noLabel.length > 20) throw new Error(`No label "${noLabel}" exceeds 20 character limit`);
+  if (text.length > 240) throw new Error(`Confirm text exceeds 240 character limit (got ${text.length})`);
   return {
     type: "template",
     altText: text,
@@ -188,6 +202,10 @@ export interface ImageCarouselColumn {
 }
 
 export function buildImageCarousel(columns: ImageCarouselColumn[]) {
+  if (columns.length > 10) throw new Error(`Image carousel supports max 10 columns, got ${columns.length}`);
+  for (const col of columns) {
+    if (col.label.length > 12) throw new Error(`Image carousel label "${col.label}" exceeds 12 character limit`);
+  }
   return {
     type: "template",
     altText: "Image carousel",
