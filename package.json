@@ -1,7 +1,7 @@
 {
-  "name": "@anthropic-tools/line-business-mcp",
-  "version": "0.1.0",
-  "description": "Full-featured LINE Business API MCP server for Claude, Cursor, and other AI coding tools. 30+ tools including messaging, rich menus, groups, webhooks, insights, and audiences.",
+  "name": "line-business-mcp",
+  "version": "0.2.0",
+  "description": "Full-featured LINE Business API MCP server for Claude, Cursor, and other AI coding tools. 35 tools including messaging, rich menus, groups, webhooks, insights, and audiences.",
   "type": "module",
   "bin": {
     "line-business-mcp": "./build/index.js"

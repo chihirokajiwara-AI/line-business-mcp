@@ -3,7 +3,7 @@
  * LINE Business MCP Server
  *
  * Full-featured LINE Messaging API integration for AI coding tools.
- * 32 tools covering messaging, profiles, rich menus, groups, webhooks,
+ * 35 tools covering messaging, profiles, rich menus, groups, webhooks,
  * insights, audiences, and account linking.
  */
 
@@ -14,7 +14,7 @@ import * as line from "./line-client.js";
 
 const server = new McpServer({
   name: "line-business-mcp",
-  version: "0.1.0",
+  version: "0.2.0",
 });
 
 // ── Helpers ──────────────────────────────────────────────
@@ -23,10 +23,44 @@ function ok(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
 }
 
+function err(message: string) {
+  return { content: [{ type: "text" as const, text: message }], isError: true as const };
+}
+
 function parseMessages(messagesJson: string): unknown[] {
-  const parsed = JSON.parse(messagesJson);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(messagesJson);
+  } catch {
+    throw new Error(`Invalid JSON in messages parameter: ${messagesJson.slice(0, 100)}`);
+  }
   return Array.isArray(parsed) ? parsed : [parsed];
 }
+
+function parseJson(json: string, paramName: string): unknown {
+  try {
+    return JSON.parse(json);
+  } catch {
+    throw new Error(`Invalid JSON in ${paramName}: ${json.slice(0, 100)}`);
+  }
+}
+
+type ToolResult = ReturnType<typeof ok> | ReturnType<typeof err>;
+
+/** Wrap a tool handler with try/catch → isError response */
+function safe<T>(fn: (args: T) => Promise<ReturnType<typeof ok>>): (args: T) => Promise<ToolResult> {
+  return async (args: T) => {
+    try {
+      return await fn(args);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return err(msg);
+    }
+  };
+}
+
+// Zod schemas for date validation
+const yyyyMMdd = z.string().regex(/^\d{8}$/, "Must be yyyyMMdd format (e.g. '20260421')");
 
 // ── Messaging Tools (7) ─────────────────────────────────
 
@@ -38,11 +72,11 @@ server.tool(
     messages: z.string().describe('JSON array of message objects, e.g. [{"type":"text","text":"Hello"}]'),
     notification_disabled: z.boolean().optional().describe("Disable push notification (default: false)"),
   },
-  async ({ to, messages, notification_disabled }) => {
+  safe(async ({ to, messages, notification_disabled }) => {
     const msgs = parseMessages(messages);
     const result = await line.pushMessage(to, msgs, notification_disabled);
     return ok(result);
-  },
+  }),
 );
 
 server.tool(
@@ -53,11 +87,11 @@ server.tool(
     messages: z.string().describe('JSON array of message objects'),
     notification_disabled: z.boolean().optional(),
   },
-  async ({ reply_token, messages, notification_disabled }) => {
+  safe(async ({ reply_token, messages, notification_disabled }) => {
     const msgs = parseMessages(messages);
     const result = await line.replyMessage(reply_token, msgs, notification_disabled);
     return ok(result);
-  },
+  }),
 );
 
 server.tool(
@@ -68,26 +102,29 @@ server.tool(
     messages: z.string().describe('JSON array of message objects'),
     notification_disabled: z.boolean().optional(),
   },
-  async ({ to, messages, notification_disabled }) => {
-    const userIds = JSON.parse(to);
+  safe(async ({ to, messages, notification_disabled }) => {
+    const userIds = parseJson(to, "to") as string[];
+    if (!Array.isArray(userIds)) throw new Error("'to' must be a JSON array of user ID strings");
     const msgs = parseMessages(messages);
     const result = await line.multicastMessage(userIds, msgs, notification_disabled);
     return ok(result);
-  },
+  }),
 );
 
 server.tool(
   "broadcast_message",
-  "Send a message to ALL followers of the bot. Use with caution — counts toward quota for every follower.",
+  "Send a message to ALL followers of the bot. This sends to every follower and counts toward quota. Set confirm=true to execute.",
   {
     messages: z.string().describe('JSON array of message objects'),
+    confirm: z.boolean().describe("Must be true to confirm sending to ALL followers"),
     notification_disabled: z.boolean().optional(),
   },
-  async ({ messages, notification_disabled }) => {
+  safe(async ({ messages, confirm, notification_disabled }) => {
+    if (!confirm) throw new Error("Set confirm=true to broadcast to ALL followers. This action is irreversible.");
     const msgs = parseMessages(messages);
     const result = await line.broadcastMessage(msgs, notification_disabled);
     return ok(result);
-  },
+  }),
 );
 
 server.tool(
@@ -98,13 +135,13 @@ server.tool(
     recipient: z.string().optional().describe('JSON recipient object (audience filter)'),
     filter: z.string().optional().describe('JSON demographic filter object'),
   },
-  async ({ messages, recipient, filter }) => {
+  safe(async ({ messages, recipient, filter }) => {
     const msgs = parseMessages(messages);
-    const r = recipient ? JSON.parse(recipient) : undefined;
-    const f = filter ? JSON.parse(filter) : undefined;
+    const r = recipient ? parseJson(recipient, "recipient") : undefined;
+    const f = filter ? parseJson(filter, "filter") : undefined;
     const result = await line.narrowcastMessage(msgs, r, f);
     return ok(result);
-  },
+  }),
 );
 
 server.tool(
@@ -113,11 +150,11 @@ server.tool(
   {
     messages: z.string().describe('JSON array of message objects to validate'),
   },
-  async ({ messages }) => {
+  safe(async ({ messages }) => {
     const msgs = parseMessages(messages);
-    const result = await line.validateMessage(msgs);
-    return ok({ valid: true, ...result as object });
-  },
+    await line.validateMessage(msgs);
+    return ok({ valid: true });
+  }),
 );
 
 server.tool(
@@ -127,10 +164,10 @@ server.tool(
     chat_id: z.string().describe("User ID to show loading animation to"),
     loading_seconds: z.number().min(5).max(60).optional().describe("Duration in seconds (default: 5)"),
   },
-  async ({ chat_id, loading_seconds }) => {
+  safe(async ({ chat_id, loading_seconds }) => {
     const result = await line.showLoadingAnimation(chat_id, loading_seconds);
     return ok(result);
-  },
+  }),
 );
 
 // ── Profile Tools (3) ───────────────────────────────────
@@ -141,10 +178,10 @@ server.tool(
   {
     user_id: z.string().describe("LINE user ID"),
   },
-  async ({ user_id }) => {
+  safe(async ({ user_id }) => {
     const result = await line.getProfile(user_id);
     return ok(result);
-  },
+  }),
 );
 
 server.tool(
@@ -153,20 +190,20 @@ server.tool(
   {
     start: z.string().optional().describe("Continuation token for pagination"),
   },
-  async ({ start }) => {
+  safe(async ({ start }) => {
     const result = await line.getFollowerIds(start);
     return ok(result);
-  },
+  }),
 );
 
 server.tool(
   "get_bot_info",
   "Get the bot's display name, user ID, premium message quota, and chat mode.",
   {},
-  async () => {
+  safe(async () => {
     const result = await line.getBotInfo();
     return ok(result);
-  },
+  }),
 );
 
 // ── Rich Menu Tools (8) ─────────────────────────────────
@@ -177,21 +214,21 @@ server.tool(
   {
     rich_menu: z.string().describe("JSON rich menu object with size, selected, name, chatBarText, and areas"),
   },
-  async ({ rich_menu }) => {
-    const menu = JSON.parse(rich_menu);
+  safe(async ({ rich_menu }) => {
+    const menu = parseJson(rich_menu, "rich_menu");
     const result = await line.createRichMenu(menu);
     return ok(result);
-  },
+  }),
 );
 
 server.tool(
   "list_rich_menus",
   "List all rich menus created for this bot.",
   {},
-  async () => {
+  safe(async () => {
     const result = await line.listRichMenus();
     return ok(result);
-  },
+  }),
 );
 
 server.tool(
@@ -200,10 +237,10 @@ server.tool(
   {
     rich_menu_id: z.string().describe("Rich menu ID"),
   },
-  async ({ rich_menu_id }) => {
+  safe(async ({ rich_menu_id }) => {
     const result = await line.getRichMenu(rich_menu_id);
     return ok(result);
-  },
+  }),
 );
 
 server.tool(
@@ -212,10 +249,10 @@ server.tool(
   {
     rich_menu_id: z.string().describe("Rich menu ID"),
   },
-  async ({ rich_menu_id }) => {
-    const result = await line.deleteRichMenu(rich_menu_id);
+  safe(async ({ rich_menu_id }) => {
+    await line.deleteRichMenu(rich_menu_id);
     return ok({ deleted: true, richMenuId: rich_menu_id });
-  },
+  }),
 );
 
 server.tool(
@@ -224,20 +261,20 @@ server.tool(
   {
     rich_menu_id: z.string().describe("Rich menu ID to set as default"),
   },
-  async ({ rich_menu_id }) => {
-    const result = await line.setDefaultRichMenu(rich_menu_id);
-    return ok({ set: true, richMenuId: rich_menu_id, ...result as object });
-  },
+  safe(async ({ rich_menu_id }) => {
+    await line.setDefaultRichMenu(rich_menu_id);
+    return ok({ set: true, richMenuId: rich_menu_id });
+  }),
 );
 
 server.tool(
   "get_default_rich_menu",
   "Get the current default rich menu ID.",
   {},
-  async () => {
+  safe(async () => {
     const result = await line.getDefaultRichMenu();
     return ok(result);
-  },
+  }),
 );
 
 server.tool(
@@ -247,10 +284,10 @@ server.tool(
     user_id: z.string().describe("LINE user ID"),
     rich_menu_id: z.string().describe("Rich menu ID"),
   },
-  async ({ user_id, rich_menu_id }) => {
-    const result = await line.linkRichMenuToUser(user_id, rich_menu_id);
-    return ok({ linked: true, userId: user_id, richMenuId: rich_menu_id, ...result as object });
-  },
+  safe(async ({ user_id, rich_menu_id }) => {
+    await line.linkRichMenuToUser(user_id, rich_menu_id);
+    return ok({ linked: true, userId: user_id, richMenuId: rich_menu_id });
+  }),
 );
 
 server.tool(
@@ -259,10 +296,10 @@ server.tool(
   {
     user_id: z.string().describe("LINE user ID"),
   },
-  async ({ user_id }) => {
-    const result = await line.unlinkRichMenuFromUser(user_id);
-    return ok({ unlinked: true, userId: user_id, ...result as object });
-  },
+  safe(async ({ user_id }) => {
+    await line.unlinkRichMenuFromUser(user_id);
+    return ok({ unlinked: true, userId: user_id });
+  }),
 );
 
 // ── Group Tools (4) ─────────────────────────────────────
@@ -273,10 +310,10 @@ server.tool(
   {
     group_id: z.string().describe("LINE group ID"),
   },
-  async ({ group_id }) => {
+  safe(async ({ group_id }) => {
     const result = await line.getGroupSummary(group_id);
     return ok(result);
-  },
+  }),
 );
 
 server.tool(
@@ -286,10 +323,10 @@ server.tool(
     group_id: z.string().describe("LINE group ID"),
     start: z.string().optional().describe("Continuation token for pagination"),
   },
-  async ({ group_id, start }) => {
+  safe(async ({ group_id, start }) => {
     const result = await line.getGroupMemberIds(group_id, start);
     return ok(result);
-  },
+  }),
 );
 
 server.tool(
@@ -299,10 +336,10 @@ server.tool(
     group_id: z.string().describe("LINE group ID"),
     user_id: z.string().describe("LINE user ID"),
   },
-  async ({ group_id, user_id }) => {
+  safe(async ({ group_id, user_id }) => {
     const result = await line.getGroupMemberProfile(group_id, user_id);
     return ok(result);
-  },
+  }),
 );
 
 server.tool(
@@ -311,10 +348,10 @@ server.tool(
   {
     group_id: z.string().describe("LINE group ID"),
   },
-  async ({ group_id }) => {
-    const result = await line.leaveGroup(group_id);
-    return ok({ left: true, groupId: group_id, ...result as object });
-  },
+  safe(async ({ group_id }) => {
+    await line.leaveGroup(group_id);
+    return ok({ left: true, groupId: group_id });
+  }),
 );
 
 // ── Webhook Tools (3) ───────────────────────────────────
@@ -325,20 +362,20 @@ server.tool(
   {
     endpoint: z.string().url().describe("HTTPS webhook endpoint URL"),
   },
-  async ({ endpoint }) => {
-    const result = await line.setWebhookUrl(endpoint);
-    return ok({ set: true, endpoint, ...result as object });
-  },
+  safe(async ({ endpoint }) => {
+    await line.setWebhookUrl(endpoint);
+    return ok({ set: true, endpoint });
+  }),
 );
 
 server.tool(
   "get_webhook_info",
   "Get the current webhook URL and its active status.",
   {},
-  async () => {
+  safe(async () => {
     const result = await line.getWebhookInfo();
     return ok(result);
-  },
+  }),
 );
 
 server.tool(
@@ -347,10 +384,10 @@ server.tool(
   {
     endpoint: z.string().url().optional().describe("URL to test (defaults to the configured webhook URL)"),
   },
-  async ({ endpoint }) => {
+  safe(async ({ endpoint }) => {
     const result = await line.testWebhook(endpoint);
     return ok(result);
-  },
+  }),
 );
 
 // ── Quota & Insight Tools (5) ───────────────────────────
@@ -359,44 +396,44 @@ server.tool(
   "get_quota",
   "Get the monthly message quota limit for this bot.",
   {},
-  async () => {
+  safe(async () => {
     const result = await line.getQuota();
     return ok(result);
-  },
+  }),
 );
 
 server.tool(
   "get_quota_consumption",
   "Get the current month's message usage count.",
   {},
-  async () => {
+  safe(async () => {
     const result = await line.getQuotaConsumption();
     return ok(result);
-  },
+  }),
 );
 
 server.tool(
   "get_follower_stats",
   "Get follower count statistics for a specific date. Data available from 7 days ago.",
   {
-    date: z.string().describe("Date in yyyyMMdd format (e.g. '20260421')"),
+    date: yyyyMMdd.describe("Date in yyyyMMdd format (e.g. '20260421')"),
   },
-  async ({ date }) => {
+  safe(async ({ date }) => {
     const result = await line.getFollowerStats(date);
     return ok(result);
-  },
+  }),
 );
 
 server.tool(
   "get_message_delivery_stats",
   "Get message delivery statistics (sent, delivered, opened) for a specific date.",
   {
-    date: z.string().describe("Date in yyyyMMdd format"),
+    date: yyyyMMdd.describe("Date in yyyyMMdd format"),
   },
-  async ({ date }) => {
+  safe(async ({ date }) => {
     const result = await line.getMessageDeliveryStats(date);
     return ok(result);
-  },
+  }),
 );
 
 server.tool(
@@ -405,10 +442,10 @@ server.tool(
   {
     request_id: z.string().describe("Request ID from a push/multicast API response"),
   },
-  async ({ request_id }) => {
+  safe(async ({ request_id }) => {
     const result = await line.getMessageEventStats(request_id);
     return ok(result);
-  },
+  }),
 );
 
 // ── Audience Tools (4) ──────────────────────────────────
@@ -420,13 +457,13 @@ server.tool(
     description: z.string().describe("Audience group name/description"),
     user_ids: z.string().optional().describe('JSON array of user IDs to add, e.g. ["U123","U456"]'),
   },
-  async ({ description, user_ids }) => {
+  safe(async ({ description, user_ids }) => {
     const audiences = user_ids
-      ? JSON.parse(user_ids).map((id: string) => ({ id }))
+      ? (parseJson(user_ids, "user_ids") as string[]).map((id: string) => ({ id }))
       : undefined;
     const result = await line.createAudience(description, audiences);
     return ok(result);
-  },
+  }),
 );
 
 server.tool(
@@ -436,10 +473,10 @@ server.tool(
     page: z.number().optional().describe("Page number (default: 1)"),
     size: z.number().optional().describe("Page size (default: 40, max: 40)"),
   },
-  async ({ page, size }) => {
+  safe(async ({ page, size }) => {
     const result = await line.listAudiences(page, size);
     return ok(result);
-  },
+  }),
 );
 
 server.tool(
@@ -448,10 +485,10 @@ server.tool(
   {
     audience_group_id: z.number().describe("Audience group ID"),
   },
-  async ({ audience_group_id }) => {
+  safe(async ({ audience_group_id }) => {
     const result = await line.getAudience(audience_group_id);
     return ok(result);
-  },
+  }),
 );
 
 server.tool(
@@ -460,10 +497,10 @@ server.tool(
   {
     audience_group_id: z.number().describe("Audience group ID"),
   },
-  async ({ audience_group_id }) => {
-    const result = await line.deleteAudience(audience_group_id);
+  safe(async ({ audience_group_id }) => {
+    await line.deleteAudience(audience_group_id);
     return ok({ deleted: true, audienceGroupId: audience_group_id });
-  },
+  }),
 );
 
 // ── Account Link Tool (1) ───────────────────────────────
@@ -474,10 +511,10 @@ server.tool(
   {
     user_id: z.string().describe("LINE user ID"),
   },
-  async ({ user_id }) => {
+  safe(async ({ user_id }) => {
     const result = await line.issueLinkToken(user_id);
     return ok(result);
-  },
+  }),
 );
 
 // ── Start Server ─────────────────────────────────────────
@@ -488,7 +525,7 @@ async function main() {
   console.error("LINE Business MCP Server running on stdio");
 }
 
-main().catch((err) => {
-  console.error("Fatal:", err);
+main().catch((e) => {
+  console.error("Fatal:", e);
   process.exit(1);
 });

@@ -33,13 +33,18 @@ async function request(
   options: RequestInit = {},
 ): Promise<unknown> {
   const token = getToken();
+  const isGet = !options.method || options.method === "GET";
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    ...options.headers as Record<string, string>,
+  };
+  if (!isGet) {
+    headers["Content-Type"] = "application/json";
+  }
   const res = await fetch(url, {
     ...options,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
+    headers,
+    signal: AbortSignal.timeout(30_000),
   });
 
   // 204 or empty body
