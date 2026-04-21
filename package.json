@@ -1,0 +1,46 @@
+{
+  "name": "@anthropic-tools/line-business-mcp",
+  "version": "0.1.0",
+  "description": "Full-featured LINE Business API MCP server for Claude, Cursor, and other AI coding tools. 30+ tools including messaging, rich menus, groups, webhooks, insights, and audiences.",
+  "type": "module",
+  "bin": {
+    "line-business-mcp": "./build/index.js"
+  },
+  "scripts": {
+    "build": "tsc && chmod 755 build/index.js",
+    "dev": "tsx src/index.ts",
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "files": [
+    "build",
+    "README.md"
+  ],
+  "keywords": [
+    "mcp",
+    "line",
+    "line-bot",
+    "line-messaging-api",
+    "claude",
+    "cursor",
+    "ai",
+    "model-context-protocol"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chihirokajiwara-AI/line-business-mcp"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.6.0"
+  }
+}
