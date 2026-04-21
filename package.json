@@ -1,7 +1,7 @@
 {
   "name": "line-business-mcp",
-  "version": "0.2.0",
-  "description": "Full-featured LINE Business API MCP server for Claude, Cursor, and other AI coding tools. 35 tools including messaging, rich menus, groups, webhooks, insights, and audiences.",
+  "version": "0.3.0",
+  "description": "The most complete LINE Business API MCP server. 45 tools: messaging, Flex builders, rich menus, groups, webhooks, insights, audiences, LINE Notify. For Claude, Cursor, Windsurf.",
   "type": "module",
   "bin": {
     "line-business-mcp": "./build/index.js"

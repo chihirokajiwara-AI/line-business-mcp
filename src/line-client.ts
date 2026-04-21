@@ -333,3 +333,84 @@ export async function deleteAudience(audienceGroupId: number) {
 export async function issueLinkToken(userId: string) {
   return request(`${API_BASE}/user/${userId}/linkToken`, { method: "POST" });
 }
+
+// ─── High-Level Helpers ──────────────────────────────────
+
+/** Auto-paginate to fetch ALL follower IDs */
+export async function getAllFollowerIds(): Promise<string[]> {
+  const all: string[] = [];
+  let start: string | undefined;
+  do {
+    const res = (await getFollowerIds(start)) as {
+      userIds: string[];
+      next?: string;
+    };
+    all.push(...res.userIds);
+    start = res.next;
+  } while (start);
+  return all;
+}
+
+/** Get aggregated insight stats across a date range */
+export async function getInsightRange(
+  startDate: string,
+  endDate: string,
+): Promise<{
+  dates: string[];
+  followerStats: unknown[];
+  deliveryStats: unknown[];
+}> {
+  const dates: string[] = [];
+  const d = new Date(
+    `${startDate.slice(0, 4)}-${startDate.slice(4, 6)}-${startDate.slice(6, 8)}`,
+  );
+  const end = new Date(
+    `${endDate.slice(0, 4)}-${endDate.slice(4, 6)}-${endDate.slice(6, 8)}`,
+  );
+
+  while (d <= end) {
+    const ds =
+      d.getFullYear().toString() +
+      (d.getMonth() + 1).toString().padStart(2, "0") +
+      d.getDate().toString().padStart(2, "0");
+    dates.push(ds);
+    d.setDate(d.getDate() + 1);
+  }
+
+  const [followerStats, deliveryStats] = await Promise.all([
+    Promise.all(dates.map((dt) => getFollowerStats(dt).catch(() => ({ date: dt, error: true })))),
+    Promise.all(dates.map((dt) => getMessageDeliveryStats(dt).catch(() => ({ date: dt, error: true })))),
+  ]);
+
+  return { dates, followerStats, deliveryStats };
+}
+
+// ─── LINE Notify ─────────────────────────────────────────
+
+export async function sendNotify(token: string, message: string) {
+  const res = await fetch("https://notify-api.line.me/api/notify", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({ message }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`LINE Notify ${res.status}: ${text}`);
+  return JSON.parse(text);
+}
+
+// ─── Message Count / Follower Count ──────────────────────
+
+export async function getNumberOfFollowers() {
+  // Get today's date minus 1 day (stats take 1 day to populate)
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  const date =
+    d.getFullYear().toString() +
+    (d.getMonth() + 1).toString().padStart(2, "0") +
+    d.getDate().toString().padStart(2, "0");
+  return getFollowerStats(date);
+}

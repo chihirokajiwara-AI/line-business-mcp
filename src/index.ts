@@ -3,18 +3,19 @@
  * LINE Business MCP Server
  *
  * Full-featured LINE Messaging API integration for AI coding tools.
- * 35 tools covering messaging, profiles, rich menus, groups, webhooks,
- * insights, audiences, and account linking.
+ * 45 tools covering messaging, message builders, profiles, rich menus,
+ * groups, webhooks, insights, audiences, LINE Notify, and account linking.
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import * as line from "./line-client.js";
+import * as builders from "./builders.js";
 
 const server = new McpServer({
   name: "line-business-mcp",
-  version: "0.2.0",
+  version: "0.3.0",
 });
 
 // ── Helpers ──────────────────────────────────────────────
@@ -513,6 +514,162 @@ server.tool(
   },
   safe(async ({ user_id }) => {
     const result = await line.issueLinkToken(user_id);
+    return ok(result);
+  }),
+);
+
+// ── Message Builder Tools (6) ────────────────────────────
+// High-level tools that generate LINE message JSON from simple parameters.
+// Users don't need to know the raw Flex/Template message spec.
+
+server.tool(
+  "build_and_send_flex_bubble",
+  "Build a rich Flex Message bubble with title, body, optional image, and buttons — then send it. No need to write raw Flex JSON.",
+  {
+    to: z.string().describe("User ID, group ID, or room ID"),
+    title: z.string().describe("Bold title text"),
+    body_text: z.string().describe("Main body text"),
+    subtitle: z.string().optional().describe("Subtitle below the title"),
+    image_url: z.string().url().optional().describe("Hero image URL (displayed at the top)"),
+    buttons: z.string().optional().describe('JSON array of buttons: [{"label":"Open","type":"uri","value":"https://...","style":"primary"}]'),
+  },
+  safe(async ({ to, title, body_text, subtitle, image_url, buttons }) => {
+    const footerButtons = buttons ? parseJson(buttons, "buttons") as builders.FlexBubbleParams["footer_buttons"] : undefined;
+    const msg = builders.buildFlexBubble({ title, body_text, subtitle, image_url, footer_buttons: footerButtons });
+    const result = await line.pushMessage(to, [msg]);
+    return ok({ sent: true, messageType: "flex_bubble", to });
+  }),
+);
+
+server.tool(
+  "build_and_send_carousel",
+  "Build and send a swipeable Flex Carousel with multiple bubbles. Each bubble can have title, body, image, and buttons.",
+  {
+    to: z.string().describe("User ID, group ID, or room ID"),
+    bubbles: z.string().describe('JSON array of bubble objects: [{"title":"...","body_text":"...","image_url":"...","footer_buttons":[...]}]'),
+  },
+  safe(async ({ to, bubbles: bubblesJson }) => {
+    const bubbleParams = parseJson(bubblesJson, "bubbles") as builders.FlexBubbleParams[];
+    if (!Array.isArray(bubbleParams) || bubbleParams.length === 0) {
+      throw new Error("bubbles must be a non-empty JSON array");
+    }
+    const msg = builders.buildFlexCarousel(bubbleParams);
+    const result = await line.pushMessage(to, [msg]);
+    return ok({ sent: true, messageType: "flex_carousel", bubbleCount: bubbleParams.length, to });
+  }),
+);
+
+server.tool(
+  "build_and_send_quick_reply",
+  "Send a text message with quick reply buttons at the bottom. Quick replies disappear after the user taps one.",
+  {
+    to: z.string().describe("User ID, group ID, or room ID"),
+    text: z.string().describe("Message text"),
+    options: z.string().describe('JSON array of options: [{"label":"Yes"},{"label":"Visit","type":"uri","uri":"https://..."}]'),
+  },
+  safe(async ({ to, text, options: optionsJson }) => {
+    const items = parseJson(optionsJson, "options") as builders.QuickReplyItem[];
+    const msg = builders.buildTextWithQuickReply(text, items);
+    const result = await line.pushMessage(to, [msg]);
+    return ok({ sent: true, messageType: "quick_reply", optionCount: items.length, to });
+  }),
+);
+
+server.tool(
+  "build_and_send_confirm",
+  "Send a confirmation dialog with Yes/No (or custom) buttons. Great for getting a binary choice from the user.",
+  {
+    to: z.string().describe("User ID, group ID, or room ID"),
+    text: z.string().describe("Question text"),
+    yes_label: z.string().describe("Label for the positive button"),
+    no_label: z.string().describe("Label for the negative button"),
+    yes_data: z.string().optional().describe("Postback data for Yes (if omitted, sends as message)"),
+    no_data: z.string().optional().describe("Postback data for No (if omitted, sends as message)"),
+  },
+  safe(async ({ to, text, yes_label, no_label, yes_data, no_data }) => {
+    const msg = builders.buildConfirmMessage(text, yes_label, no_label, yes_data, no_data);
+    const result = await line.pushMessage(to, [msg]);
+    return ok({ sent: true, messageType: "confirm", to });
+  }),
+);
+
+server.tool(
+  "build_and_send_image_carousel",
+  "Send a horizontally scrollable image carousel where each image is tappable.",
+  {
+    to: z.string().describe("User ID, group ID, or room ID"),
+    columns: z.string().describe('JSON array: [{"image_url":"...","label":"Tap","action_type":"uri","action_value":"https://..."}]'),
+  },
+  safe(async ({ to, columns: columnsJson }) => {
+    const cols = parseJson(columnsJson, "columns") as builders.ImageCarouselColumn[];
+    const msg = builders.buildImageCarousel(cols);
+    const result = await line.pushMessage(to, [msg]);
+    return ok({ sent: true, messageType: "image_carousel", columnCount: cols.length, to });
+  }),
+);
+
+server.tool(
+  "build_and_send_notification",
+  "Send a formatted notification/summary card with key-value pairs. Great for order confirmations, status updates, reports.",
+  {
+    to: z.string().describe("User ID, group ID, or room ID"),
+    heading: z.string().describe("Notification heading"),
+    items: z.string().describe('JSON array of items: [{"title":"Status","value":"Active","color":"#1DB446"}]'),
+    footer_text: z.string().optional().describe("Small footer text"),
+  },
+  safe(async ({ to, heading, items: itemsJson, footer_text }) => {
+    const items = parseJson(itemsJson, "items") as builders.NotificationItem[];
+    const msg = builders.buildNotificationSummary(heading, items, footer_text);
+    const result = await line.pushMessage(to, [msg]);
+    return ok({ sent: true, messageType: "notification_summary", itemCount: items.length, to });
+  }),
+);
+
+// ── High-Level Tools (4) ────────────────────────────────
+
+server.tool(
+  "get_all_follower_ids",
+  "Fetch ALL follower IDs by auto-paginating through the API. Returns the complete list regardless of size. May take a while for large follower bases.",
+  {},
+  safe(async () => {
+    const ids = await line.getAllFollowerIds();
+    return ok({ totalFollowers: ids.length, userIds: ids });
+  }),
+);
+
+server.tool(
+  "get_follower_count",
+  "Get the current follower count (uses yesterday's stats since LINE stats have a 1-day delay).",
+  {},
+  safe(async () => {
+    const result = await line.getNumberOfFollowers();
+    return ok(result);
+  }),
+);
+
+server.tool(
+  "get_insight_range",
+  "Get aggregated follower and message delivery stats across a date range. Useful for trend analysis and reporting.",
+  {
+    start_date: yyyyMMdd.describe("Start date in yyyyMMdd format"),
+    end_date: yyyyMMdd.describe("End date in yyyyMMdd format"),
+  },
+  safe(async ({ start_date, end_date }) => {
+    const result = await line.getInsightRange(start_date, end_date);
+    return ok(result);
+  }),
+);
+
+server.tool(
+  "send_line_notify",
+  "Send a simple notification via LINE Notify (separate from Messaging API). Requires a LINE Notify access token set as LINE_NOTIFY_TOKEN env var.",
+  {
+    message: z.string().describe("Notification message text"),
+  },
+  safe(async ({ message }) => {
+    const token = process.env.LINE_NOTIFY_TOKEN;
+    if (!token) throw new Error("LINE_NOTIFY_TOKEN not set. Get one at https://notify-bot.line.me/");
+    const result = await line.sendNotify(token, message);
     return ok(result);
   }),
 );
